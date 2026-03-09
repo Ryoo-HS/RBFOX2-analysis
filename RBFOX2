@@ -1,0 +1,33 @@
+------------------------ubuntu-----------------------------------
+bowtie2 -q -3 6 -p 12 -x ~/index/rRNA.13500.fasta.index -U ~/RBFOX2/RBFOX2/
+RBFOX2_trimmed_rc_unique_hg19.fastq -S ~/RBFOX2/RBFOX2/RBFOX2_rRNA.sam --un ~/RBFOX2/RBFOX2/RBFOX2_rRNA_un.fastq
+48510106 reads; of these:
+  48510106 (100.00%) were unpaired; of these:
+    47647795 (98.22%) aligned 0 times
+    858533 (1.77%) aligned exactly 1 time
+    3778 (0.01%) aligned >1 times
+1.78% overall alignment rate
+(base) ryoo@DESKTOP-72GITR4:~/RBFOX2/RBFOX2$ bowtie2 -q -3 6 -p 12 -x ~/index/tRNA.fasta.index -U ~/RBFOX2/RBFOX2/RBFOX2_rRNA_un.fastq -S ~/RBFOX2/RBFOX2/RBFOX2_tRAN.sam --un ~/RBFOX2/RBFOX2/RBFOX2_rRNA_tRNA_un.fastq
+47647795 reads; of these:
+  47647795 (100.00%) were unpaired; of these:
+    47557153 (99.81%) aligned 0 times
+    24894 (0.05%) aligned exactly 1 time
+    65748 (0.14%) aligned >1 times
+0.19% overall alignment rate
+(base) ryoo@DESKTOP-72GITR4:~/RBFOX2/RBFOX2$ bowtie2 -q -3 6 -p 12 -x ~/index/hg19/hg19 -U ~/RBFOX2/RBFOX2/RBFOX2_rRNA_tRNA_un.fastq -S ~/RBFOX2/RBFOX2/RBFOX2_hg19.sam
+47557153 reads; of these:
+  47557153 (100.00%) were unpaired; of these:
+    9065019 (19.06%) aligned 0 times
+    25233952 (53.06%) aligned exactly 1 time
+    13258182 (27.88%) aligned >1 times
+80.94% overall alignment rate
+
+samtools view -bS ~/RBFOX2/RBFOX2/RBFOX2_hg19.sam > ~/RBFOX2/RBFOX2/RBFOX2_hg19.bam
+(base) ryoo@DESKTOP-72GITR4:~/RBFOX2/RBFOX2$ samtools sort -@ 6 ~/RBFOX2/RBFOX2/RBFOX2_hg19.bam -o ~/RBFOX2/RBFOX2/RBFOX2_hg19.sorted.bam
+[bam_sort_core] merging from 2 files and 6 in-memory blocks...
+(base) ryoo@DESKTOP-72GITR4:~/RBFOX2/RBFOX2$ samtools index ~/RBFOX2/RBFOX2/RBFOX2_hg19.sorted.bam
+------------------------R-----------------------------------
+
+
+
+

@@ -1,0 +1,12 @@
+
+RBFOX2_trimmed_rc_unique_hg19.fastq파일을 매핑
+bowtie -v 0 -S -x ~/index_ebwt/hg19_tRNA_index --un RBFOX2/RBFOX2_tRNA_trim.fastq RBFOX2/RBFOX2_trimmed_rc_unique_hg19.fastq > mapped_to_tRNA.sam
+bowtie -v 0 -S -x ~/index_ebwt/hg19_sn_sno_mi_RNA_index --un RBFOX2/RBFOX2_tRNA_sn_sno_mi_RNA_trim.fastq RBFOX2/RBFOX2_tRNA_trim.fastq > mapped_to_tRNA_sn_sno_mi_RNA.sam
+bowtie -v 0 -S -x ~/index_ebwt/hg19_rRNA_index --un RBFOX2/RBFOX2_tRNA_sn_sno_mi_RNA_rRNA_trim.fastq RBFOX2/RBFOX2_tRNA_sn_sno_mi_RNA_trim.fastq > mapped_to_tRNA_sn_sno_mi_RNA_rRNA.sam
+bowtie -v 0 -S -x ~/index_ebwt/hg19_index RBFOX2/RBFOX2_tRNA_sn_sno_mi_RNA_rRNA_trim.fastq > RBFOX2_mapped_to_tRNA_sn_sno_mi_RNA_rRNA_hg19.sam
+
+
+samtools를 이용 bam/bai만들기
+samtools view -bS RBFOX2/RBFOX2_mapped_to_tRNA_sn_sno_miRNA_rRNA_hg19.sam > RBFOX2/RBFOX2_mapped_to_tRNA_sn_sno_miRNA_rRNA_hg19.bam
+samtools sort -@ 6 -m 1G RBFOX2/RBFOX2_mapped_to_tRNA_sn_sno_miRNA_rRNA_hg19.bam -o RBFOX2/RBFOX2_mapped_to_tRNA_sn_sno_miRNA_rRNA_hg19.sorted.bam
+samtools index RBFOX2/RBFOX2_mapped_to_tRNA_sn_sno_miRNA_rRNA_hg19.sorted.bam

@@ -1,0 +1,18 @@
+# R
+.RData
+.Rhistory
+.Rproj.user/
+
+# 대용량 원본/중간 데이터
+*.bam
+*.bai
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.sam
+*.bw
+*.bigwig
+
+# 시스템/에디터
+.DS_Store
+*:Zone.Identifier

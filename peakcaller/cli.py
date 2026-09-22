@@ -34,7 +34,9 @@ def build_parser():
     g.add_argument("--min-summit-reads", type=float, default=1.0, help="height floor at summit")
     g.add_argument("--summit-margins", type=str, default=None,
                    help="comma-separated ascending non-negative-int margins (raw reads, "
-                        "max 3, e.g. 3,8,18) above the auto background floor "
+                        "max 3, e.g. 18,48,98 -- roughly 20/50/100 at a typical floor=2, "
+                        "spacing chosen from observed summit distributions, not "
+                        "significance thresholds) above the auto background floor "
                         "(ceil of the trimmed-mean covered-base depth at trim=25%% of "
                         "this BAM -- see calibrate.auto_summit_floor). Candidates are "
                         "generated once at the T1 threshold; each called peak is tagged "

@@ -31,15 +31,17 @@ class Config:
     region_scale_pct: float = 90.0     # region scale = this percentile of covered depth
     min_steepness: float = 0.0         # min prominence / width (rise per bp)
     min_summit_reads: float = 1.0      # absolute height floor at the summit
-    summit_margins: tuple[int, ...] | None = None  # e.g. (3, 8, 18): ascending,
+    summit_margins: tuple[int, ...] | None = None  # e.g. (18, 48, 98): ascending,
                                         # non-negative, raw-read margins above the
                                         # auto background floor (see
-                                        # calibrate.auto_summit_floor). Candidates
-                                        # are generated once at the lowest (T1)
-                                        # threshold; each called peak is tagged with
-                                        # the highest tier its summit height clears
-                                        # (see Peak.tier). AND'd with
-                                        # min_summit_reads: effective T1 =
+                                        # calibrate.auto_summit_floor) -- 20/50/100
+                                        # at floor=2, spacing chosen from observed
+                                        # summit distribution, not significance
+                                        # thresholds. Candidates are generated once
+                                        # at the lowest (T1) threshold; each called
+                                        # peak is tagged with the highest tier its
+                                        # summit height clears (see Peak.tier).
+                                        # AND'd with min_summit_reads: effective T1 =
                                         # max(min_summit_reads, floor + margins[0]).
                                         # None = off (default, unchanged behavior).
     split_tiers: bool = False          # also write one output file per tier;

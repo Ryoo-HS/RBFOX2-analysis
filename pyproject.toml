@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prominence-peakcaller"
+version = "0.1.0"
+description = "Rule-based (local-prominence) peak caller for CLIP-seq / RBP binding data"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ryoo Hyunsoo" }]
+keywords = ["CLIP-seq", "peak-calling", "bioinformatics", "RBP", "eCLIP"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "pysam>=0.19",
+    "numpy>=1.20",
+    "scipy>=1.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+peakcaller = "peakcaller.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourname/prominence-peakcaller"
+
+[tool.setuptools]
+packages = ["peakcaller"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

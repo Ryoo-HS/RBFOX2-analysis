@@ -31,6 +31,23 @@ class Config:
     region_scale_pct: float = 90.0     # region scale = this percentile of covered depth
     min_steepness: float = 0.0         # min prominence / width (rise per bp)
     min_summit_reads: float = 1.0      # absolute height floor at the summit
+    summit_margins: tuple[int, ...] | None = None  # e.g. (18, 48, 98): ascending,
+                                        # non-negative, raw-read margins above the
+                                        # auto background floor (see
+                                        # calibrate.auto_summit_floor) -- 20/50/100
+                                        # at floor=2, spacing chosen from observed
+                                        # summit distribution, not significance
+                                        # thresholds. Candidates are generated once
+                                        # at the lowest (T1) threshold; each called
+                                        # peak is tagged with the highest tier its
+                                        # summit height clears (see Peak.tier).
+                                        # AND'd with min_summit_reads: effective T1 =
+                                        # max(min_summit_reads, floor + margins[0]).
+                                        # None = off (default, unchanged behavior).
+    split_tiers: bool = False          # also write one output file per tier;
+                                        # only used with summit_margins (CLI-level
+                                        # concern, but kept here so Config is the
+                                        # single source of truth for a run).
     min_distance: int = 15             # min bp between two summits
     min_peak_width: int = 5            # min peak width (bp)
     rel_height: float = 0.3            # boundary width point (0=tip, 1=base); real-data-tuned
@@ -89,6 +106,7 @@ class Result:
     factor: float
     total_reads: int = 0
     strands: tuple = ("+", "-")
+    summit_tier_diag: dict | None = None  # set iff cfg.summit_margins was used
 
 
 def run(bam_path: str, cfg: Config, *, chroms: list[str] | None = None) -> Result:
@@ -183,6 +201,43 @@ def run(bam_path: str, cfg: Config, *, chroms: list[str] | None = None) -> Resul
         log.info("min-corrected-steepness=%.4g (peak_depth - bg_depth) / (width/2), raw "
                  "depth units", cfg.min_corrected_steepness)
 
+    summit_thresholds = None       # signal-units tier thresholds, ascending
+    effective_min_summit_reads = cfg.min_summit_reads
+    summit_tier_diag = None
+    if cfg.summit_margins:
+        floor_raw, floor_diag = calibrate.auto_summit_floor(
+            bam_path, library=cfg.library, min_mapq=cfg.min_mapq, keep_dup=cfg.keep_dup,
+            min_read_length=cfg.min_read_length, coverage_gap=cfg.coverage_gap)
+        raw_thresholds = [floor_raw + m for m in cfg.summit_margins]
+        # same raw -> signal-units scaling already used for region_min_depth /
+        # min_prominence above: `factor` is 1.0 unless --normalize-method rpm.
+        summit_thresholds = [t * factor for t in raw_thresholds]
+        if cfg.min_summit_reads > summit_thresholds[0]:
+            log.warning(
+                "--min-summit-reads=%.4g exceeds the auto T1 threshold=%.4g "
+                "(floor=%.4g raw + margin=%d); --min-summit-reads overrides T1 for "
+                "both candidate generation and tier assignment",
+                cfg.min_summit_reads, summit_thresholds[0], floor_raw, cfg.summit_margins[0])
+        summit_thresholds[0] = max(cfg.min_summit_reads, summit_thresholds[0])
+        effective_min_summit_reads = summit_thresholds[0]
+        if len(summit_thresholds) > 1 and summit_thresholds[0] >= summit_thresholds[1]:
+            log.warning(
+                "effective T1 threshold=%.4g also reaches or exceeds T2=%.4g -- "
+                "tier T2%s may end up empty",
+                summit_thresholds[0], summit_thresholds[1],
+                " (and T3)" if len(summit_thresholds) > 2 else "")
+        summit_tier_diag = {
+            "floor_raw": floor_raw, "bg_trim_raw": floor_diag["bg_trim"],
+            "trim_pct": floor_diag["trim_pct"], "margins": list(cfg.summit_margins),
+            "raw_thresholds": raw_thresholds, "effective_thresholds": list(summit_thresholds),
+            "factor": factor,
+        }
+        log.info("summit-margins floor=%.4g (bg_trim@trim=%.0f%%=%.4g raw, sampled=%s), "
+                 "margins=%s, thresholds(raw)=%s, effective(signal units)=%s",
+                 floor_raw, floor_diag["trim_pct"], floor_diag["bg_trim"],
+                 floor_diag["sampled_chroms"], list(cfg.summit_margins), raw_thresholds,
+                 [round(t, 4) for t in summit_thresholds])
+
     peaks: list[Peak] = []
     seen_reads = 0
     n_low_complexity = 0
@@ -222,7 +277,7 @@ def run(bam_path: str, cfg: Config, *, chroms: list[str] | None = None) -> Resul
                 signal, sub,
                 min_prominence=min_prominence, prominence_frac=cfg.prominence_frac,
                 region_scale_pct=cfg.region_scale_pct, min_steepness=cfg.min_steepness,
-                min_summit_reads=cfg.min_summit_reads, min_distance=cfg.min_distance,
+                min_summit_reads=effective_min_summit_reads, min_distance=cfg.min_distance,
                 min_peak_width=cfg.min_peak_width, rel_height=cfg.rel_height,
                 max_peaks_per_region=cfg.max_peaks_per_region)
             # Post-filter, so core.py's prominence math is untouched. Note this
@@ -234,10 +289,12 @@ def run(bam_path: str, cfg: Config, *, chroms: list[str] | None = None) -> Resul
                 cores = complexity.filter_cores(cores, cs, blocks, min_complexity)
                 n_low_complexity += n_before - len(cores)
             for c in cores:
+                tier = (calibrate.tier_for_signal(c["signal"], summit_thresholds)
+                        if summit_thresholds is not None else None)
                 chrom_peaks.append(Peak(
                     chrom=chrom, start=cs + c["start"], end=cs + c["end"], strand=st,
                     summit=cs + c["summit"], signal=c["signal"], baseline=c["baseline"],
-                    fold=c["fold"], region_scale=c.get("region_scale", 0.0)))
+                    fold=c["fold"], region_scale=c.get("region_scale", 0.0), tier=tier))
 
         # --flank first, then depth_ratio, so the local-background measurement
         # describes the interval that is actually written out. Both are done per
@@ -274,7 +331,8 @@ def run(bam_path: str, cfg: Config, *, chroms: list[str] | None = None) -> Resul
                  n_weak_isolated, cfg.min_corrected_steepness)
     peaks.sort(key=lambda p: (p.chrom, p.start, p.end, p.strand))
     for i, p in enumerate(peaks, 1):
-        p.name = f"peak_{i}"
+        p.name = f"peak_{i}" + (f"_T{p.tier}" if p.tier is not None else "")
     log.info("called %d peaks", len(peaks))
     return Result(peaks=peaks, factor=factor,
-                  total_reads=total_reads or seen_reads, strands=strands)
+                  total_reads=total_reads or seen_reads, strands=strands,
+                  summit_tier_diag=summit_tier_diag)

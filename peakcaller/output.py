@@ -87,8 +87,16 @@ def _scores(peaks: List[Peak]) -> List[int]:
     return scores.tolist()
 
 
-def write_narrowpeak(peaks: Iterable[Peak], handle: TextIO) -> int:
+def _write_header(handle: TextIO, header_lines) -> None:
+    if not header_lines:
+        return
+    for line in header_lines:
+        handle.write(f"# {line}\n")
+
+
+def write_narrowpeak(peaks: Iterable[Peak], handle: TextIO, *, header_lines=None) -> int:
     peaks = list(peaks)
+    _write_header(handle, header_lines)
     scores = _scores(peaks)
     for p, score in zip(peaks, scores):
         handle.write(
@@ -98,8 +106,9 @@ def write_narrowpeak(peaks: Iterable[Peak], handle: TextIO) -> int:
     return len(peaks)
 
 
-def write_bed6(peaks: Iterable[Peak], handle: TextIO) -> int:
+def write_bed6(peaks: Iterable[Peak], handle: TextIO, *, header_lines=None) -> int:
     peaks = list(peaks)
+    _write_header(handle, header_lines)
     scores = _scores(peaks)
     for p, score in zip(peaks, scores):
         handle.write(f"{p.chrom}\t{p.start}\t{p.end}\t{p.name}\t{score}\t{p.strand}\n")

@@ -236,3 +236,77 @@ def test_cli_context_window_defaults_to_1000():
     args = build_parser().parse_args(
         ["--bam", "x.bam", "-o", "out.narrowPeak", "--context-window", "0"])
     assert args.context_window == 0
+
+
+# --- --summit-margins (stage-2 tiered summit floor) --------------------------
+
+def test_background_stats_median_and_upper_trimmed_mean():
+    from peakcaller.calibrate import background_stats
+    depths = np.array([1, 1, 1, 2, 2, 3, 100], dtype=np.int64)
+    stats = background_stats(depths, trim_pct=(1 / 7) * 100)  # drop just the 100
+    assert stats["n"] == 7
+    assert stats["median"] == 2.0
+    assert stats["trim"] == pytest.approx(np.mean([1, 1, 1, 2, 2, 3]))
+
+
+def test_background_stats_empty():
+    from peakcaller.calibrate import background_stats
+    stats = background_stats(np.array([], dtype=np.int64))
+    assert stats == {"median": 0.0, "trim": 0.0, "n": 0}
+
+
+def test_tier_for_signal_picks_highest_cleared_tier():
+    from peakcaller.calibrate import tier_for_signal
+    thresholds = [5.0, 10.0, 20.0]
+    assert tier_for_signal(5.0, thresholds) == 1
+    assert tier_for_signal(9.9, thresholds) == 1
+    assert tier_for_signal(10.0, thresholds) == 2
+    assert tier_for_signal(19.9, thresholds) == 2
+    assert tier_for_signal(20.0, thresholds) == 3
+    assert tier_for_signal(1000.0, thresholds) == 3
+
+
+def test_cli_summit_margins_default_is_off():
+    args = build_parser().parse_args(["--bam", "x.bam", "-o", "out.narrowPeak"])
+    assert args.summit_margins is None
+    assert args.split_tiers is False
+
+
+def test_cli_summit_margins_parses_ascending_ints():
+    from peakcaller.cli import _validate
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--bam", "x.bam", "-o", "out.narrowPeak", "--summit-margins", "3,8,18"])
+    _validate(parser, args)
+    assert args.summit_margins == (3, 8, 18)
+
+
+def test_cli_summit_margins_single_value_ok():
+    from peakcaller.cli import _validate
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--bam", "x.bam", "-o", "out.narrowPeak", "--summit-margins", "5"])
+    _validate(parser, args)
+    assert args.summit_margins == (5,)
+
+
+@pytest.mark.parametrize("bad", ["8,3", "3,3,8", "-1,3,8", "1,2,3,4", "a,b,c", ""])
+def test_cli_summit_margins_rejects_invalid(bad):
+    # argparse itself rejects a leading "-1,..." at parse time (looks like an
+    # unknown option), everything else is rejected by _validate -- either way
+    # it must be a SystemExit, so both calls are wrapped together.
+    from peakcaller.cli import _validate
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        args = parser.parse_args(
+            ["--bam", "x.bam", "-o", "out.narrowPeak", "--summit-margins", bad])
+        _validate(parser, args)
+
+
+def test_cli_split_tiers_requires_summit_margins():
+    from peakcaller.cli import _validate
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--bam", "x.bam", "-o", "out.narrowPeak", "--split-tiers"])
+    with pytest.raises(SystemExit):
+        _validate(parser, args)

@@ -33,6 +33,7 @@ without needing gene annotation or a statistical background model.
 from __future__ import annotations
 
 import logging
+import math
 
 import numpy as np
 import pysam
@@ -60,6 +61,7 @@ DEFAULT_TARGET_FDR = 0.05
 DEFAULT_N_SHUFFLES = 3
 MIN_REAL_COUNT = 30  # ignore FDR estimates backed by fewer real summits than this
 _FIND_REGIONS_FLOOR = 5.0  # low floor used only to enumerate candidate regions for sampling
+DEFAULT_SUMMIT_FLOOR_TRIM_PCT = 25.0  # trim% used by auto_summit_floor (--summit-margins)
 
 
 def _sample_chroms(bam_path: str, n: int) -> list[str]:
@@ -386,3 +388,75 @@ def auto_min_prominence(
             f"noisier than others, or --fdr-n-shuffles may need to be higher for a more "
             f"stable estimate")
     return max(chosen, 5.0), diagnostics
+
+
+# ---------------------------------------------------------------------------
+# auto_summit_floor: descriptive background floor for --summit-margins
+# ---------------------------------------------------------------------------
+#
+# Same "descriptive, not a significance test" stance as auto_region_min_depth
+# above: this measures the BAM's own covered-base depth population and turns
+# it into a raw-read floor, rather than picking a fixed constant or testing
+# significance. The canonical "background depth" computation
+# (``background_stats``) is shared with scripts/diag_bg.py's stage-1
+# region-min-depth diagnostic -- one definition of "bg" for both.
+
+
+def background_stats(depths: np.ndarray, trim_pct: float = 2.0) -> dict:
+    """Median and upper-trimmed mean (drop the top ``trim_pct``% before
+    averaging) of a covered-base (depth >= 1) population."""
+    if depths.size == 0:
+        return {"median": 0.0, "trim": 0.0, "n": 0}
+    median = float(np.median(depths))
+    cutoff = np.percentile(depths, 100.0 - trim_pct)
+    kept = depths[depths <= cutoff]
+    trim_mean = float(kept.mean()) if kept.size else median
+    return {"median": median, "trim": trim_mean, "n": int(depths.size)}
+
+
+def auto_summit_floor(
+    bam_path: str,
+    *,
+    library: str = "forward",
+    min_mapq: int = 0,
+    keep_dup: bool = False,
+    min_read_length: int = 0,
+    coverage_gap: int = 200,
+    trim_pct: float = DEFAULT_SUMMIT_FLOOR_TRIM_PCT,
+    sample_n: int = DEFAULT_SAMPLE_N,
+) -> tuple[float, dict]:
+    """Return ``(floor, diagnostics)``.
+
+    ``floor = ceil(bg_trim)``, where ``bg_trim`` is the ``trim_pct``-th
+    upper-trimmed mean (default 25%) of this BAM's own covered-base depth,
+    pooled across both strands and a sample of the largest autosomes (same
+    sampling as ``auto_region_min_depth``). Raw depth units -- the caller
+    (``pipeline.run``) scales this by ``factor`` before comparing against
+    normalized signal, the same way it already does for
+    ``region_min_depth``/``min_prominence``.
+    """
+    chroms = _sample_chroms(bam_path, sample_n)
+    parts = []
+    for c in chroms:
+        isls, _n, _abp = chrom_islands(
+            bam_path, c, library=library, min_mapq=min_mapq, keep_dup=keep_dup,
+            min_read_length=min_read_length, coverage_gap=coverage_gap)
+        for _st, _s, _e, arr in isls:
+            covered = arr[arr > 0]
+            if covered.size:
+                parts.append(covered)
+    depths = np.concatenate(parts) if parts else np.array([], dtype=np.int64)
+    stats = background_stats(depths, trim_pct=trim_pct)
+    floor = float(math.ceil(stats["trim"])) if stats["n"] else 1.0
+    diagnostics = {
+        "sampled_chroms": chroms, "trim_pct": trim_pct, "bg_trim": stats["trim"],
+        "bg_median": stats["median"], "n_covered_bases": stats["n"],
+    }
+    return floor, diagnostics
+
+
+def tier_for_signal(signal: float, thresholds: list[float]) -> int:
+    """Highest 1-indexed tier (T1, T2, ...) whose ``thresholds[i]`` ``signal``
+    clears. ``thresholds`` must be ascending; index 0 is assumed always
+    satisfied (candidates are generated at that floor in the first place)."""
+    return max(i + 1 for i, thr in enumerate(thresholds) if signal >= thr)

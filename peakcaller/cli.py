@@ -32,6 +32,19 @@ def build_parser():
     g.add_argument("--min-steepness", type=float, default=0.0,
                    help="min prominence/width; drops gentle bumps (e.g. 0.5)")
     g.add_argument("--min-summit-reads", type=float, default=1.0, help="height floor at summit")
+    g.add_argument("--summit-margins", type=str, default=None,
+                   help="comma-separated ascending non-negative-int margins (raw reads, "
+                        "max 3, e.g. 3,8,18) above the auto background floor "
+                        "(ceil of the trimmed-mean covered-base depth at trim=25%% of "
+                        "this BAM -- see calibrate.auto_summit_floor). Candidates are "
+                        "generated once at the T1 threshold; each called peak is tagged "
+                        "with the highest tier (T1..Tn) its summit height clears and the "
+                        "name column gets a _T<n> suffix. AND'd with --min-summit-reads: "
+                        "effective T1 = max(--min-summit-reads, floor + margins[0]). "
+                        "Default off (no tiers; existing single-threshold behavior)")
+    g.add_argument("--split-tiers", action="store_true",
+                   help="also write one output file per tier (<output>.T1.<ext> etc.) "
+                        "in addition to the combined file; requires --summit-margins")
     g.add_argument("--context-window", type=int, default=1000,
                    help="bp each side used as local background for the depth_ratio "
                         "SCORING component: peak mean depth / mean depth of the same-strand "
@@ -128,7 +141,8 @@ def _config_from_args(a):
         target_fdr=a.target_fdr,
         fdr_n_shuffles=a.fdr_n_shuffles, prominence_frac=a.prominence_frac,
         region_scale_pct=a.region_scale_pct, min_steepness=a.min_steepness,
-        min_summit_reads=a.min_summit_reads, min_distance=a.min_distance,
+        min_summit_reads=a.min_summit_reads, summit_margins=a.summit_margins,
+        split_tiers=a.split_tiers, min_distance=a.min_distance,
         min_peak_width=a.min_peak_width, flank=a.flank, min_complexity=a.min_complexity,
         context_window=a.context_window, min_corrected_steepness=a.min_corrected_steepness,
         rel_height=a.rel_height, max_peaks_per_region=a.max_peaks_per_region,
@@ -149,6 +163,20 @@ def _write_bedgraphs(bam_path, args, result):
                             chroms=args.chrom)
     for p in paths:
         logging.getLogger("peakcaller").info("wrote %s", p)
+
+
+def _parse_summit_margins(s: str, parser):
+    try:
+        vals = [int(x) for x in s.split(",")]
+    except ValueError:
+        parser.error(f"--summit-margins must be comma-separated integers (got {s!r})")
+    if not 1 <= len(vals) <= 3:
+        parser.error(f"--summit-margins must have 1-3 values (got {len(vals)}: {vals})")
+    if any(v < 0 for v in vals):
+        parser.error(f"--summit-margins values must be >= 0 (got {vals})")
+    if any(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)):
+        parser.error(f"--summit-margins must be strictly ascending (got {vals})")
+    return tuple(vals)
 
 
 def _validate(parser, a):
@@ -183,6 +211,10 @@ def _validate(parser, a):
         parser.error(f"--target-fdr must be between 0 (exclusive) and 1 (got {a.target_fdr})")
     if a.fdr_n_shuffles < 1:
         parser.error(f"--fdr-n-shuffles must be >= 1 (got {a.fdr_n_shuffles})")
+    if a.summit_margins is not None:
+        a.summit_margins = _parse_summit_margins(a.summit_margins, parser)
+    if a.split_tiers and a.summit_margins is None:
+        parser.error("--split-tiers requires --summit-margins")
 
 
 def main(argv=None):
@@ -200,9 +232,28 @@ def main(argv=None):
         print(f"error: {e}", file=sys.stderr)
         return 1
     writer = write_narrowpeak if args.format == "narrowPeak" else write_bed6
+    header_lines = None
+    if result.summit_tier_diag:
+        d = result.summit_tier_diag
+        header_lines = [
+            f"summit-margins floor={d['floor_raw']:.4g} raw "
+            f"(bg_trim@trim={d['trim_pct']:.0f}%={d['bg_trim_raw']:.4g} raw)",
+            f"summit-margins margins={d['margins']} raw_thresholds={d['raw_thresholds']}",
+            f"summit-margins effective_thresholds(signal units)="
+            f"{[round(t, 4) for t in d['effective_thresholds']]}",
+        ]
     with open(args.output, "w") as fh:
-        n = writer(result.peaks, fh)
+        n = writer(result.peaks, fh, header_lines=header_lines)
     print(f"{n} peaks written to {args.output}")
+    if args.split_tiers and result.summit_tier_diag:
+        base, ext = os.path.splitext(args.output)
+        n_tiers = len(result.summit_tier_diag["effective_thresholds"])
+        for t in range(1, n_tiers + 1):
+            tier_peaks = [p for p in result.peaks if p.tier == t]
+            tier_path = f"{base}.T{t}{ext}"
+            with open(tier_path, "w") as fh:
+                writer(tier_peaks, fh, header_lines=header_lines)
+            print(f"{len(tier_peaks)} T{t} peaks written to {tier_path}")
     if args.bdg:
         _write_bedgraphs(args.bam, args, result)
     return 0

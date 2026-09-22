@@ -21,6 +21,9 @@ class Peak:
     peak_depth: float = 0.0
     bg_depth: float = 0.0
     name: str = "peak"
+    # Highest --summit-margins tier (1 = T1, 2 = T2, ...) this peak's summit
+    # height clears. None = --summit-margins not requested (unchanged default).
+    tier: int | None = None
 
     @property
     def length(self) -> int:

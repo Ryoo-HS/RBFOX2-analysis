@@ -345,3 +345,79 @@ def test_depth_ratio_is_measured_on_the_flanked_interval(context_bam):
     b = _nearest(run(context_bam, _ctx_cfg(flank=200)).peaks, 5_000)
     assert b.end - b.start > a.end - a.start
     assert b.depth_ratio != a.depth_ratio
+
+
+# --- --summit-margins (stage-2 tiered summit floor) --------------------------
+
+def test_auto_summit_floor_is_ceil_of_trimmed_mean_at_25pct(bam):
+    from peakcaller import calibrate
+    floor, diag = calibrate.auto_summit_floor(bam, library="forward")
+    assert diag["trim_pct"] == 25.0
+    assert diag["sampled_chroms"]
+    assert floor == float(__import__("math").ceil(diag["bg_trim"]))
+
+
+def test_summit_margins_default_off_leaves_tier_and_naming_unchanged(bam):
+    assert Config().summit_margins is None
+    res = run(bam, Config(normalize_method="none", min_prominence=20, min_summit_reads=5))
+    assert res.peaks
+    assert all(p.tier is None for p in res.peaks)
+    assert all(not p.name.endswith(tuple(f"_T{i}" for i in (1, 2, 3))) for p in res.peaks)
+    assert res.summit_tier_diag is None
+
+
+def test_summit_margins_tags_peaks_with_ascending_tiers_and_suffixes_name(bam):
+    res = run(bam, Config(normalize_method="none", min_prominence=20, min_summit_reads=1,
+                          summit_margins=(1, 2, 3)))
+    assert res.peaks
+    assert res.summit_tier_diag is not None
+    assert all(p.tier in (1, 2, 3) for p in res.peaks)
+    assert all(p.name.endswith(f"_T{p.tier}") for p in res.peaks)
+    # the two real mountains are far above a background-derived floor + a few reads
+    summits = {p.summit: p.tier for p in res.peaks if p.strand == "+"}
+    mountain_tiers = [t for s, t in summits.items()
+                      if abs(s - 5000) < 120 or abs(s - 5300) < 120]
+    assert mountain_tiers and all(t == 3 for t in mountain_tiers)
+
+
+def test_summit_margins_min_summit_reads_override_wins_and_warns(bam, caplog):
+    import logging
+
+    from peakcaller import calibrate
+    floor, _diag = calibrate.auto_summit_floor(bam, library="forward")
+    high_floor = floor + 50  # comfortably above the auto T1 threshold (floor + 1)
+    with caplog.at_level(logging.WARNING, logger="peakcaller"):
+        res = run(bam, Config(normalize_method="none", min_prominence=1,
+                              min_summit_reads=high_floor, summit_margins=(1, 2, 3),
+                              min_peak_width=1, min_distance=5))
+    assert any("exceeds the auto T1 threshold" in r.message for r in caplog.records)
+    # effective T1 must be min_summit_reads, not floor+1 -- every surviving peak's
+    # summit is at least that high.
+    assert all(p.signal >= high_floor for p in res.peaks)
+
+
+def test_summit_margins_header_and_split_tiers_via_cli(bam, tmp_path):
+    from peakcaller.cli import main
+    out = tmp_path / "out.narrowPeak"
+    rc = main(["--bam", bam, "-o", str(out), "--min-prominence", "20",
+              "--min-summit-reads", "1", "--summit-margins", "1,2,3", "--split-tiers"])
+    assert rc == 0
+    lines = out.read_text().splitlines()
+    header = [l for l in lines if l.startswith("#")]
+    assert any(l.startswith("# summit-margins floor=") for l in header)
+    assert any("margins=" in l for l in header)
+    assert any("effective_thresholds" in l for l in header)
+    body = [l for l in lines if not l.startswith("#")]
+    assert body  # sanity: peaks were actually written after the header
+    for t in (1, 2, 3):
+        tier_path = tmp_path / f"out.T{t}.narrowPeak"
+        assert tier_path.exists()
+        tier_body = [l for l in tier_path.read_text().splitlines() if not l.startswith("#")]
+        for line in tier_body:
+            assert line.split("\t")[3].endswith(f"_T{t}")
+
+
+def test_split_tiers_without_summit_margins_errors():
+    from peakcaller.cli import main
+    with pytest.raises(SystemExit):
+        main(["--bam", "x.bam", "-o", "out.narrowPeak", "--split-tiers"])

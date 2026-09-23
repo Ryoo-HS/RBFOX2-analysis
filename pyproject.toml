@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prominence-peakcaller"
+name = "rbpc"
 version = "0.1.0"
 description = "Rule-based (local-prominence) peak caller for CLIP-seq / RBP binding data"
 readme = "README.md"
@@ -27,13 +27,13 @@ dependencies = [
 test = ["pytest>=7"]
 
 [project.scripts]
-peakcaller = "peakcaller.cli:main"
+rbpc = "rbpc.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourname/prominence-peakcaller"
+Homepage = "https://github.com/yourname/rbpc"
 
 [tool.setuptools]
-packages = ["peakcaller"]
+packages = ["rbpc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

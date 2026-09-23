@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from peakcaller import core, island, normalize
-from peakcaller.cli import build_parser
-from peakcaller.pipeline import Config
+from rbpc import core, island, normalize
+from rbpc.cli import build_parser
+from rbpc.pipeline import Config
 
 
 def test_flank_default_is_10bp():
@@ -25,7 +25,7 @@ def test_cli_defaults_auto_stage1_but_static_min_prominence():
 
 
 def test_cli_min_prominence_auto_fdr_is_opt_in():
-    from peakcaller.cli import _config_from_args
+    from rbpc.cli import _config_from_args
     p = build_parser()
     assert _config_from_args(p.parse_args(
         ["--bam", "x.bam", "-o", "o"])).min_prominence == 5.0
@@ -87,7 +87,7 @@ def test_prominence_splits_two_mountains():
 
 
 def test_width_complexity_counts_distinct_starts_per_bp():
-    from peakcaller.complexity import block_bounds, width_complexity
+    from rbpc.complexity import block_bounds, width_complexity
     # 6 reads, but only 2 distinct start positions -> 2 molecules, amplified.
     blocks = [(100, 130)] * 4 + [(110, 140)] * 2
     starts, ends = block_bounds(blocks)
@@ -101,13 +101,13 @@ def test_width_complexity_counts_distinct_starts_per_bp():
 
 
 def test_width_complexity_empty_and_non_overlapping():
-    from peakcaller.complexity import block_bounds, width_complexity
+    from rbpc.complexity import block_bounds, width_complexity
     assert width_complexity(*block_bounds([]), 0, 10) == (0.0, 0)
     assert width_complexity(*block_bounds([(500, 530)]), 0, 10) == (0.0, 0)
 
 
 def test_min_complexity_defaults_to_min_steepness():
-    from peakcaller.complexity import resolve_min_complexity
+    from rbpc.complexity import resolve_min_complexity
     # None = "the same bar, applied to molecules instead of reads"
     assert resolve_min_complexity(None, 0.5) == 0.5
     # ...so with the default min_steepness=0 the filter stays off (backward compatible)
@@ -118,7 +118,7 @@ def test_min_complexity_defaults_to_min_steepness():
 
 
 def test_min_complexity_is_converted_to_molecule_units_under_rpm():
-    from peakcaller.complexity import resolve_min_complexity
+    from rbpc.complexity import resolve_min_complexity
     # min_steepness is in signal units per bp; under rpm one molecule is worth
     # `factor` signal units, so the molecules-per-bp floor is steepness/factor.
     assert resolve_min_complexity(None, 0.5, factor=0.5) == 1.0
@@ -136,12 +136,12 @@ def test_cli_min_complexity_defaults_to_auto():
 # --- local background contrast (context.py / depth_ratio) --------------------
 
 def _idx(blocks):
-    from peakcaller.context import build_block_index
+    from rbpc.context import build_block_index
     return build_block_index(blocks)
 
 
 def test_window_depth_matches_naive_block_sum():
-    from peakcaller.context import window_depth
+    from rbpc.context import window_depth
     blocks = [(10, 20), (12, 18), (30, 40)]
     starts, ends, mx = _idx(blocks)
     arr = window_depth(starts, ends, mx, 0, 50)
@@ -152,7 +152,7 @@ def test_window_depth_matches_naive_block_sum():
 
 
 def test_depth_ratio_is_peak_mean_over_background_mean():
-    from peakcaller.context import depth_ratio
+    from rbpc.context import depth_ratio
     # peak [100,110) covered 10 deep; background is a flat 1-deep carpet.
     blocks = [(100, 110)] * 10 + [(0, 300)]
     starts, ends, mx = _idx(blocks)
@@ -166,7 +166,7 @@ def test_depth_ratio_is_peak_mean_over_background_mean():
 def test_depth_ratio_masks_other_called_peaks_out_of_the_background():
     """The CDH2 case: a neighbouring real peak must not inflate the background
     and drag its own cluster's contrast down."""
-    from peakcaller.context import depth_ratio
+    from rbpc.context import depth_ratio
     blocks = [(100, 110)] * 10 + [(200, 210)] * 10 + [(0, 300)]
     starts, ends, mx = _idx(blocks)
     alone = (np.array([100], dtype=np.int64), np.array([110], dtype=np.int64))
@@ -181,7 +181,7 @@ def test_depth_ratio_masks_other_called_peaks_out_of_the_background():
 def test_depth_ratio_is_scale_free_under_uniform_depth_change():
     """A ratio of depths, so sequencing depth / normalization cancels -- the
     property an absolute magnitude floor lacks."""
-    from peakcaller.context import depth_ratio
+    from rbpc.context import depth_ratio
     base = [(100, 110)] * 5 + [(0, 300)]
     starts, ends, mx = _idx(base)
     deep_starts, deep_ends, deep_mx = _idx(base * 7)
@@ -192,7 +192,7 @@ def test_depth_ratio_is_scale_free_under_uniform_depth_change():
 
 
 def test_depth_ratio_reports_inf_when_no_background_remains():
-    from peakcaller.context import depth_ratio
+    from rbpc.context import depth_ratio
     starts, ends, mx = _idx([(100, 110)] * 3)
     bounds = (np.array([100], dtype=np.int64), np.array([110], dtype=np.int64))
     r, _, bg = depth_ratio(starts, ends, mx, 100, 110, bounds, window=50)
@@ -202,14 +202,14 @@ def test_depth_ratio_reports_inf_when_no_background_remains():
 def test_score_weights_sum_to_one_and_include_depth_ratio():
     import inspect
 
-    from peakcaller import output
+    from rbpc import output
     src = inspect.getsource(output._scores)
     assert "0.40 * p_comp + 0.15 * r_comp + 0.25 * s_comp + 0.20 * c_comp" in src
 
 
 def test_score_rises_with_depth_ratio_all_else_equal():
-    from peakcaller.output import _scores
-    from peakcaller.peaks import Peak
+    from rbpc.output import _scores
+    from rbpc.peaks import Peak
 
     def mk(dr):
         return Peak(chrom="c", start=0, end=20, strand="+", summit=10, signal=100.0,
@@ -219,8 +219,8 @@ def test_score_rises_with_depth_ratio_all_else_equal():
 
 
 def test_infinite_depth_ratio_does_not_poison_the_reference():
-    from peakcaller.output import _scores
-    from peakcaller.peaks import Peak
+    from rbpc.output import _scores
+    from rbpc.peaks import Peak
 
     def mk(dr):
         return Peak(chrom="c", start=0, end=20, strand="+", summit=10, signal=100.0,
@@ -241,7 +241,7 @@ def test_cli_context_window_defaults_to_1000():
 # --- --summit-margins (stage-2 tiered summit floor) --------------------------
 
 def test_background_stats_median_and_upper_trimmed_mean():
-    from peakcaller.calibrate import background_stats
+    from rbpc.calibrate import background_stats
     depths = np.array([1, 1, 1, 2, 2, 3, 100], dtype=np.int64)
     stats = background_stats(depths, trim_pct=(1 / 7) * 100)  # drop just the 100
     assert stats["n"] == 7
@@ -250,13 +250,13 @@ def test_background_stats_median_and_upper_trimmed_mean():
 
 
 def test_background_stats_empty():
-    from peakcaller.calibrate import background_stats
+    from rbpc.calibrate import background_stats
     stats = background_stats(np.array([], dtype=np.int64))
     assert stats == {"median": 0.0, "trim": 0.0, "n": 0}
 
 
 def test_tier_for_signal_picks_highest_cleared_tier():
-    from peakcaller.calibrate import tier_for_signal
+    from rbpc.calibrate import tier_for_signal
     thresholds = [5.0, 10.0, 20.0]
     assert tier_for_signal(5.0, thresholds) == 1
     assert tier_for_signal(9.9, thresholds) == 1
@@ -273,7 +273,7 @@ def test_cli_summit_margins_default_is_off():
 
 
 def test_cli_summit_margins_parses_ascending_ints():
-    from peakcaller.cli import _validate
+    from rbpc.cli import _validate
     parser = build_parser()
     args = parser.parse_args(
         ["--bam", "x.bam", "-o", "out.narrowPeak", "--summit-margins", "3,8,18"])
@@ -282,7 +282,7 @@ def test_cli_summit_margins_parses_ascending_ints():
 
 
 def test_cli_summit_margins_single_value_ok():
-    from peakcaller.cli import _validate
+    from rbpc.cli import _validate
     parser = build_parser()
     args = parser.parse_args(
         ["--bam", "x.bam", "-o", "out.narrowPeak", "--summit-margins", "5"])
@@ -295,7 +295,7 @@ def test_cli_summit_margins_rejects_invalid(bad):
     # argparse itself rejects a leading "-1,..." at parse time (looks like an
     # unknown option), everything else is rejected by _validate -- either way
     # it must be a SystemExit, so both calls are wrapped together.
-    from peakcaller.cli import _validate
+    from rbpc.cli import _validate
     parser = build_parser()
     with pytest.raises(SystemExit):
         args = parser.parse_args(
@@ -304,7 +304,7 @@ def test_cli_summit_margins_rejects_invalid(bad):
 
 
 def test_cli_split_tiers_requires_summit_margins():
-    from peakcaller.cli import _validate
+    from rbpc.cli import _validate
     parser = build_parser()
     args = parser.parse_args(
         ["--bam", "x.bam", "-o", "out.narrowPeak", "--split-tiers"])

@@ -7,8 +7,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "examples"))
 import make_example_bam  # noqa: E402
 
-from peakcaller import coverage  # noqa: E402
-from peakcaller.pipeline import Config, run  # noqa: E402
+from rbpc import coverage  # noqa: E402
+from rbpc.pipeline import Config, run  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +65,7 @@ def test_region_min_depth_none_triggers_auto_computation(bam):
 
 
 def test_auto_region_min_depth_rejects_self_referential_noise(bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     value, chroms = calibrate.auto_region_min_depth(bam, library="forward")
     assert value >= 1.0
     assert chroms
@@ -89,7 +89,7 @@ def test_min_region_width_none_triggers_auto_computation(bam):
 
 
 def test_auto_min_region_width_is_two_read_lengths(bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     width, diag = calibrate.auto_min_region_width(bam)
     assert diag["n_reads"] > 0
     assert diag["sampled_chroms"]
@@ -100,7 +100,7 @@ def test_auto_min_region_width_is_two_read_lengths(bam):
 
 
 def test_auto_min_region_width_scales_with_factor(bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     w2, _ = calibrate.auto_min_region_width(bam, factor=2.0)
     w4, _ = calibrate.auto_min_region_width(bam, factor=4.0)
     assert w4 == 2 * w2
@@ -136,7 +136,7 @@ def stack_bam(tmp_path_factory):
 
 
 def test_min_region_width_drops_near_duplicate_stack(stack_bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     width, diag = calibrate.auto_min_region_width(stack_bam)
     assert width == 60  # 2 x 30bp reads
 
@@ -171,14 +171,14 @@ def test_min_prominence_none_triggers_auto_computation(bam):
 
 
 def test_auto_min_prominence_rejects_noisier_null_than_real(bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     value, diag = calibrate.auto_min_prominence(bam, library="forward", n_shuffles=1)
     assert value >= 5.0
     assert diag["sampled_chroms"]
 
 
 def test_narrowpeak_columns(bam, tmp_path):
-    from peakcaller.output import write_narrowpeak
+    from rbpc.output import write_narrowpeak
     res = run(bam, Config(normalize_method="none", min_prominence=20, min_summit_reads=5))
     out = tmp_path / "peaks.narrowPeak"
     with open(out, "w") as fh:
@@ -350,7 +350,7 @@ def test_depth_ratio_is_measured_on_the_flanked_interval(context_bam):
 # --- --summit-margins (stage-2 tiered summit floor) --------------------------
 
 def test_auto_summit_floor_is_ceil_of_trimmed_mean_at_25pct(bam):
-    from peakcaller import calibrate
+    from rbpc import calibrate
     floor, diag = calibrate.auto_summit_floor(bam, library="forward")
     assert diag["trim_pct"] == 25.0
     assert diag["sampled_chroms"]
@@ -383,10 +383,10 @@ def test_summit_margins_tags_peaks_with_ascending_tiers_and_suffixes_name(bam):
 def test_summit_margins_min_summit_reads_override_wins_and_warns(bam, caplog):
     import logging
 
-    from peakcaller import calibrate
+    from rbpc import calibrate
     floor, _diag = calibrate.auto_summit_floor(bam, library="forward")
     high_floor = floor + 50  # comfortably above the auto T1 threshold (floor + 1)
-    with caplog.at_level(logging.WARNING, logger="peakcaller"):
+    with caplog.at_level(logging.WARNING, logger="rbpc"):
         res = run(bam, Config(normalize_method="none", min_prominence=1,
                               min_summit_reads=high_floor, summit_margins=(1, 2, 3),
                               min_peak_width=1, min_distance=5))
@@ -397,7 +397,7 @@ def test_summit_margins_min_summit_reads_override_wins_and_warns(bam, caplog):
 
 
 def test_summit_margins_header_and_split_tiers_via_cli(bam, tmp_path):
-    from peakcaller.cli import main
+    from rbpc.cli import main
     out = tmp_path / "out.narrowPeak"
     rc = main(["--bam", bam, "-o", str(out), "--min-prominence", "20",
               "--min-summit-reads", "1", "--summit-margins", "1,2,3", "--split-tiers"])
@@ -418,6 +418,6 @@ def test_summit_margins_header_and_split_tiers_via_cli(bam, tmp_path):
 
 
 def test_split_tiers_without_summit_margins_errors():
-    from peakcaller.cli import main
+    from rbpc.cli import main
     with pytest.raises(SystemExit):
         main(["--bam", "x.bam", "-o", "out.narrowPeak", "--split-tiers"])

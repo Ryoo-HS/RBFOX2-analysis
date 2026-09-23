@@ -8,7 +8,7 @@ from . import calibrate, complexity, context, core, island, normalize
 from .coverage import blocks_to_array, chrom_island_blocks, count_library
 from .peaks import Peak
 
-log = logging.getLogger("peakcaller")
+log = logging.getLogger("rbpc")
 
 
 @dataclass

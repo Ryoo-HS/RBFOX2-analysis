@@ -48,7 +48,7 @@ from .coverage import (
     chrom_islands,
 )
 
-log = logging.getLogger("peakcaller")
+log = logging.getLogger("rbpc")
 
 DEFAULT_PCT = 75.0     # modest by design: on real data this already excludes
                         # single/double-read noise (~75% of islands) without

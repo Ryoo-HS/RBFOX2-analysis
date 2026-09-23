@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 python make_example_bam.py -o example.bam
 
-peakcaller \
+rbpc \
     --bam example.bam \
     --normalize-method none \
     --min-prominence 20 \

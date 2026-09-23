@@ -22,12 +22,12 @@ import sys
 import numpy as np
 import pysam
 
-from peakcaller import calibrate
-from peakcaller.calibrate import background_stats  # noqa: F401 -- canonical "bg" impl,
+from rbpc import calibrate
+from rbpc.calibrate import background_stats  # noqa: F401 -- canonical "bg" impl,
                                                     # shared with auto_summit_floor
                                                     # (--summit-margins, stage 2)
-from peakcaller.coverage import _drop_flags, _feature_strand, chrom_islands
-from peakcaller.normalize import scaling_factor
+from rbpc.coverage import _drop_flags, _feature_strand, chrom_islands
+from rbpc.normalize import scaling_factor
 
 TRIM_PCT = 2.0  # exclude the top 2% of covered-base depths before averaging
 

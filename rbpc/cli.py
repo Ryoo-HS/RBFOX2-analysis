@@ -13,7 +13,7 @@ from .pipeline import Config, run
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="peakcaller",
+        prog="rbpc",
         description="Rule-based (prominence) peak caller for CLIP-seq / RBP data.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--bam", required=True, help="input BAM (coordinate sorted + indexed)")
@@ -164,7 +164,7 @@ def _write_bedgraphs(bam_path, args, result):
                             coverage_gap=args.coverage_gap, factor=result.factor,
                             chroms=args.chrom)
     for p in paths:
-        logging.getLogger("peakcaller").info("wrote %s", p)
+        logging.getLogger("rbpc").info("wrote %s", p)
 
 
 def _parse_summit_margins(s: str, parser):

@@ -14,7 +14,7 @@ import numpy as np
 from scipy.signal import find_peaks
 
 _EPS = 1e-9
-log = logging.getLogger("peakcaller")
+log = logging.getLogger("rbpc")
 
 
 def call_cores(

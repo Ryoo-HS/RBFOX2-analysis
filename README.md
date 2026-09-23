@@ -1,394 +1,228 @@
-# prominence-peakcaller
+# RBPC
 
-A rule-based peak caller for CLIP-seq / RBP-binding data. It follows the way a
-researcher reads a coverage track in IGV, as a **two-stage** decision:
+CLIP-seq 데이터에서 RNA-binding protein의 결합 부위(peak)를 찾는 도구.
 
-1. **Region (stage 1)** — first find the stretches that are genuinely covered
-   ("this region has signal"), the way existing callers delimit enriched
-   regions.
-2. **Peaks (stage 2)** — then, *inside* each region, pick the spots that rise
-   sharply above their **local surroundings** and come back down — the real
-   mountains. "Prominence relative to the surroundings" is the core idea.
+통계적 유의성 검정(p-value / q-value) 대신 **주변부 대비 신호가 얼마나 솟아 있는지(prominence)** 로 peak을 판정한다.
+IGV에서 coverage track을 눈으로 보고 판단하는 방식을 코드로 옮긴 것에 가깝다.
 
-No p-value / q-value, no training, no annotation. Detection is built on
-`scipy.signal.find_peaks` (topographic prominence), which naturally splits a
-broad multi-hump region into one peak per hump.
+> **개발 중단 (2026-09).** 학부 연구를 마무리하면서 개발을 멈췄다.
+> 배포용이 아니라 작업 기록을 남기는 목적의 저장소다.
+> 아래 "한계"에 적힌 검증들을 하지 않았으므로 결과를 그대로 연구에 쓰기는 어렵다.
 
-## Install
+---
 
-```bash
-pip install .
-# or for development:
-pip install -e ".[test]"
-```
+## 동작 방식
 
-Requires Python ≥ 3.9, `pysam`, `numpy`, `scipy`. Linux. The BAM must be
-coordinate-sorted and indexed (`samtools sort`, `samtools index`).
+두 단계로 나뉜다.
 
-## Usage
+**Stage 1 — 후보 구간 찾기**
+read가 일정 깊이 이상 깔린 구간(region)을 찾는다. 절대 depth 기준.
 
-```bash
-peakcaller \
-    --bam input.bam \
-    --min-prominence 20 \
-    --min-summit-reads 30 \
-    --prominence-frac 0.2 \
-    --min-steepness 0.5 \
-    --rel-height 0.3 \
-    --library-type forward \
-    -o output.narrowPeak
-```
+**Stage 2 — peak 판정**
+각 구간 안에서 주변보다 뚜렷하게 솟은 지점을 peak으로 부른다. 모양(prominence) 기준.
 
-`peakcaller -h` prints the full help.
+p-value / q-value는 계산하지 않는다. narrowPeak 출력의 8, 9번 컬럼은 `-1`로 고정된다.
 
-## How it works
+---
 
-```
-BAM ─▶ coverage (per-strand, splice-aware, pysam)
-    ─▶ [normalize: none = raw counts (default) | rpm = per-million]
-    ─▶ STAGE 1  regions = covered stretches with depth >= region-min-depth,
-                          gaps <= region-gap merged, then regions narrower than
-                          min-region-width (one read's width) dropped as
-                          duplicate read stacks
-    ─▶ STAGE 2  inside each region, scipy.find_peaks by topographic prominence:
-                 a summit is a peak if it rises above its flanking valleys by
-                   >= max(min-prominence, prominence-frac x region-scale)   AND
-                 is steep enough (>= min-steepness) AND tall enough (min-summit-reads).
-                 boundary width is set by rel-height; keep top max-peaks-per-region.
-                 then drop peaks whose reads come from too few distinct start
-                 positions (min-complexity) -- amplified, not independent, evidence.
-    ─▶ SCORING  each surviving peak is also measured against a fixed +-context-window
-                 local background with all called peaks masked out (depth_ratio);
-                 this only ranks peaks, it never removes any.
-    ─▶ narrowPeak / BED6  (+ optional bedGraph)
-```
+## 자동으로 정해지는 값
 
-**Prominence** is how far a summit rises above the higher of the two valleys
-that flank it — a *local* measure, so the same threshold behaves consistently
-across regions of different depth. **`prominence-frac`** makes the bar
-region-adaptive: on a tall gene a peak must rise a real fraction of the region's
-scale (a high percentile of its covered depth), so small ripples and
-shoulder-bumps on a dominant peak are dropped, while peaks in low-coverage
-regions still pass via the absolute `min-prominence` floor.
+근거를 세울 수 있었던 것만 자동 계산한다.
 
-## Options
+| 값 | 계산 방식 | 근거 |
+|--|--|--|
+| `min-region-width` | `2 × p90(read length)` | 이 폭보다 넓으면 PCR duplication 스택으로 설명할 수 없음 |
+| `min-complexity` | `min-steepness`와 동일 | dedup 시 steepness의 상한이라는 수학적 관계 |
+| summit floor | `ceil(bg_trim25)` | BAM의 노이즈 바닥 (covered base depth에서 상위 25% 제외한 평균) |
 
-| option | default | meaning |
-|---|---|---|
-| `--bam` | — | input BAM (sorted + indexed) |
-| `-o, --output` | — | output peak file |
-| `--format` | `narrowPeak` | `narrowPeak` (ENCODE BED6+4) or `bed` (BED6) |
-| **peak detection** | | |
-| `--min-prominence` | `5` | absolute floor: rise above flanking valleys (signal units); deliberately low — selectivity is meant to come from `--prominence-frac` and stage 1 |
-| `--prominence-frac` | `0` | region-adaptive: also require prominence ≥ frac × region scale (e.g. 0.2) |
-| `--region-scale-pct` | `90` | percentile of the region's covered depth used as its scale |
-| `--min-steepness` | `0` | min prominence / width (rise per bp); drops gentle broad bumps (e.g. 0.5) |
-| `--min-summit-reads` | `1` | absolute height floor at the summit |
-| `--min-complexity` | *= `--min-steepness`* | min distinct read start positions (independent molecules) per bp of peak width; rejects tall humps built from a few heavily amplified molecules. `0` = off, see below |
-| `--context-window` | `1000` | bp each side used as the local background for the `depth_ratio` **scoring** component (peak depth ÷ background depth, all called peaks masked out). Never filters a peak. `0` = skip, see Output |
-| `--min-distance` | `15` | minimum bp between two summits |
-| `--min-peak-width` | `5` | minimum peak width (bp) |
-| `--flank` | `10` | widen each called peak by N bp on both sides in the output (e.g. for motif search near, not just at, the summit); does not affect detection |
-| `--rel-height` | `0.3` | boundary width point (0 = tip, 1 = base); lower = tighter peak |
-| `--max-peaks-per-region` | `0` | 0 = unlimited; N = keep only the strongest N per region/gene |
-| **region (stage 1)** | | |
-| `--region-min-depth` | *auto* | a region needs depth ≥ this (enrichment gate; prunes stage-2 work). Auto = a percentile of this BAM's own per-island max depth |
-| `--region-min-depth-pct` | `75` | percentile used for the auto `--region-min-depth`; raise it for fewer, stronger regions |
-| `--region-gap` | `200` | max gap (bp, depth < region-min-depth) merged into one region |
-| `--min-region-reads` | `0` | drop regions with fewer than ~N reads (0 = off) |
-| `--min-region-width` | *auto* | drop regions narrower than N bp (0 = off). Auto = `factor` × this BAM's read length — the main artifact filter, see below |
-| `--min-region-width-factor` | `2` | auto `--min-region-width` = this many read lengths (90th pct of aligned read length) |
-| **coverage building** (memory chunking, not biological) | | |
-| `--coverage-gap` | `200` | merge raw read blocks within this many bp into one coverage chunk; keep ≥ `--region-gap` |
-| **normalization** | | |
-| `--normalize-method` | `none` | `none` = raw counts (thresholds mean "reads"); `rpm` = per-million |
-| `--scale-to` | `1e6` | reads to scale to under rpm |
-| **BAM handling** | | |
-| `--library-type` | `forward` | `forward`, `reverse` (typical single-end eCLIP), `unstranded` |
-| `--min-mapq` | `0` | minimum mapping quality |
-| `--min-read-length` | `0` | drop reads shorter than this (bp) |
-| `--keep-dup` | off | keep duplicate-flagged reads (default: drop) |
-| `--bdg` | off | also write per-strand bedGraph tracks |
-| `--chrom` | all | restrict to a chromosome (repeatable) |
+나머지(`prominence-frac`, `min-steepness`, `rel-height`)는 사용자가 정하는 값이다.
+자동 결정을 세 번 시도했지만 depth 분포에 뚜렷한 경계(elbow)가 없어 근거를 만들 수 없었다.
 
-> **Strand — verify this per library, do not assume.** Single-end eCLIP is
-> *often* reverse-stranded, but preprocessing can already have flipped the
-> reads. This only relabels column 6 (peak coordinates, prominence and score
-> are byte-identical either way), but getting it wrong inverts every downstream
-> motif or gene assignment.
->
-> Two cheap checks that don't need IGV, both of which decided it for the three
-> BAMs in `~/test` (all three turned out to be **`forward`**, because the
-> upstream pipeline had already reverse-complemented the reads — see
-> `~/test/README.md`):
-> 1. **Gene-strand agreement** — in loci with no antisense gene, count reads
->    aligning on the annotated gene's strand. 86–88% agreement means forward;
->    a similar majority the other way means reverse.
-> 2. **Motif orientation** — scan enriched k-mers near summits on both
->    orientations. The one that recovers the protein's canonical motif
->    (e.g. RBFOX2 `TGCATG`, QKI `ACTAAC`) is the correct strand.
+---
 
-> **`--coverage-gap` vs `--region-gap`.** These look similar but serve different
-> stages: `--coverage-gap` merges raw read blocks into per-chromosome array chunks
-> (stage 0, purely a memory/chunking concern — never a whole-chromosome array);
-> `--region-gap` merges depth-below-threshold gaps into one *region* (stage 1, a
-> biologically meaningful choice). Because stage 0 runs first, a `--coverage-gap`
-> smaller than `--region-gap` silently caps how far apart two regions can ever be
-> merged. Keep `--coverage-gap >= --region-gap` (the default keeps both at 200).
+## `--summit-margins`: 결과를 3단계로 나누기
 
-> **Stage-1 auto-calibration.** Both stage-1 gates default to a value measured
-> from the BAM itself, so a new library needs no hand-tuning:
-> `--region-min-depth` is a percentile (`--region-min-depth-pct`, default 75) of
-> the per-coverage-island **max depth** population — on real data ~66–75% of
-> coverage islands are a single overlapping read, and this discards them;
-> `--min-region-width` is `--min-region-width-factor` × the 90th percentile of
-> this BAM's **aligned read length**. Neither is a statistical test — they are
-> descriptions of what the library contains. Pass an explicit number to either
-> option to override (`--min-region-width 0` turns the width filter off).
->
-> **Why width is the primary artifact filter.** A pile of reads that all start
-> at the *same* position — PCR/optical near-duplicates, the dominant CLIP
-> artifact — makes a hump purely from read-edge geometry, and that hump sits on
-> a zero baseline, so its prominence equals its full height and it passes any
-> *relative* test trivially (`region_scale` is its own depth). Width is what
-> gives it away: a region covered only by reads sharing one start position can
-> never be wider than the longest read in the library. Measured on real data
-> (ESRP1, chr1): 68% of sub-30bp regions are a single distinct read start, and
-> that fraction hits exactly 0% at 75bp — the library's longest read is 70bp.
-> The default (2 × p90 read length ≈ 88bp there) sits just past that point.
-> In practice this drops ~78% of stage-1 regions but only ~6% of called peaks:
-> it is an artifact/compute filter, **not** a peak-count dial. Use
-> `--region-min-depth-pct` for overall stringency.
->
-> **`--min-complexity` — how many *molecules*, not how many reads.** The width
-> filter above only catches stacks narrower than a read. A handful of amplified
-> stacks a few hundred bp apart merge into a wide region, pass stage 1, and then
-> pass stage 2 for the same reason: each hump sits on a zero baseline, so its
-> prominence *is* its height and every relative test is satisfied trivially.
-> Making the prominence floor taller does not fix this — depth counts PCR copies,
-> so a magnitude floor does not transfer between libraries of different depth.
->
-> So instead of asking how tall a peak is, this filter asks **how many
-> independent molecules built it**. For single-end reads the alignment start
-> position is the standard duplicate signature (what `samtools markdup`
-> collapses on), so
->
-> ```
-> width_complexity = (distinct read start positions overlapping the peak) / peak width
-> ```
->
-> is "independent molecules per bp". The threshold is **not** a new tuned
-> number: `width_complexity` is an *upper bound on the peak's own steepness
-> measured on deduplicated coverage*. Keep one read per distinct start and every
-> position inside the peak is covered at most `n_distinct` times, so the
-> deduplicated prominence — and hence `prominence / width` — cannot exceed
-> `n_distinct / width`. A peak below `--min-steepness` on this measure therefore
-> **provably** fails the steepness bar you already set, once duplicates are
-> collapsed; that is why the default is `--min-steepness` itself. (Measured on
-> ESRP1 chr18 the bound holds for 100% of peaks and is tight: the median ratio of
-> actual deduplicated steepness to `width_complexity` is 1.00.) With the default
-> `--min-steepness 0` the filter is off, so nothing changes unless you ask for
-> steepness at all. Under `--normalize-method rpm` the floor is converted to
-> molecule units automatically.
->
-> It reverses a magnitude floor's decisions in both directions, which is the
-> point: on ESRP1 it **drops** a prominence-**1631** peak built from **7**
-> distinct molecules (233 PCR copies each) and **keeps** prominence-5 peaks built
-> from 5–11 independent ones. All 8 peaks of the known CDH2 cluster
-> (chr18:25.53Mb) survive, at `width_complexity` 0.89–3.22.
->
-> **It is a duplication filter, so its effect depends on the library, not on a
-> dial setting** (whole genome, `--min-steepness 0.5`): ESRP1 73,678 → 15,042
-> (−80%), RBFOX2 415,711 → 48,187 (−88%), QKI 78,523 → 6,889 (−91%) — but YBX1
-> only 383,478 → 288,951 (−25%), because that library genuinely is not
-> duplicated (median 2.4 reads per molecule, versus 6.5–11 for the other
-> three). That is the metric reporting a
-> property of the data rather than imposing a target count.
->
-> **`--min-complexity`: count molecules, not reads.** Width (above) catches a
-> stack narrower than one read, but not a *wide* region built from a handful of
-> heavily amplified molecules — and such a hump sits on a zero baseline too, so
-> its prominence equals its full height and it passes every *relative* test
-> trivially. The fix is not a taller prominence floor (a magnitude floor does
-> not transfer across libraries, because depth counts PCR copies, not
-> molecules). It is to ask **how many independent molecules made this peak**:
-> for single-end data the alignment start position is the standard duplicate
-> signature, so
->
-> ```
-> width_complexity = distinct read start positions / peak width   (molecules per bp)
-> ```
->
-> **The threshold is derived, not tuned.** `width_complexity` is an upper bound
-> on the peak's own steepness measured on *deduplicated* coverage: keep one read
-> per distinct start and every position in the peak is covered at most
-> `n_distinct` times, so `steepness_dedup <= n_distinct / width`. A peak below
-> `--min-steepness` on this scale therefore **provably cannot** clear the
-> steepness bar you already set once PCR duplicates are collapsed — which is why
-> the default is `--min-steepness` itself rather than a new constant. Measured on
-> ESRP1 chr18 the bound holds for 100% of peaks and is *tight* (median ratio of
-> real deduplicated steepness to `width_complexity` = 1.00). With the default
-> `--min-steepness 0` the filter is off; pass a number to set it independently,
-> or `0` to disable.
->
-> It filters by *kind* of evidence, not amount — on ESRP1 it drops a
-> prominence-**1631** hump made of **7** molecules (233 PCR copies each) while
-> keeping prominence-**5** peaks made of 5–11 independent molecules; a magnitude
-> floor does exactly the reverse. Being a duplication filter, how much it removes
-> depends on how duplicated the library is (real data, `--min-steepness 0.5`):
-> ESRP1 73,678 → 15,042, RBFOX2 415,711 → 48,187, QKI 78,523 → 6,889, but YBX1
-> 383,478 → 288,951 because that library genuinely is not duplicated (median 2.4
-> copies per molecule vs 6.5–11 for the others). Like `--min-region-width`, it is
-> an artifact filter, not a peak-count dial.
-
-> **No significance testing — including in the calibration.** There is an
-> opt-in `--min-prominence-auto-fdr` that picks a prominence floor by empirical
-> FDR against a read-block-shuffled null. It works, but it is deliberately not
-> the default: "accept peaks with FDR ≤ 5%" is a significance test, and this
-> caller is designed without one (columns 8/9 stay `-1`).
-
-> **`--flank`.** Widens each already-called peak symmetrically after detection
-> (e.g. `--flank 20` turns a 30 bp peak into a 70 bp one, centered the same) —
-> useful for motif search, since the motif may sit near the summit rather than
-> exactly inside the tight `--rel-height`-bounded core. Purely a post-hoc output
-> transform: it does not change which peaks get called, only the reported
-> `start`/`end` (clamped to `[0, chrom length)`). Neighboring flanked peaks are
-> not merged even if they end up overlapping.
-
-## Output — narrowPeak columns
-
-Standard ENCODE narrowPeak (BED6+4):
-
-| col | field | value |
-|---|---|---|
-| 5 | score | composite, ~0–1000 (no hard ceiling, see below) |
-| 7 | signalValue | the peak's **prominence** |
-| 8, 9 | pValue, qValue | `-1` (no statistical test, by design) |
-| 10 | peak | summit offset from the peak start |
-
-The **score** combines four normalized factors of peak quality, since no
-p/q-value is computed: prominence (log-scaled), region significance
-(prominence ÷ region scale), steepness (prominence ÷ width), and local
-background contrast (`depth_ratio`, see below), weighted
-0.40 / 0.15 / 0.25 / 0.20. Each factor is scaled against the 95th percentile of that
-same factor across **all peaks called in this run** (not a fixed constant) —
-a peak sitting exactly at that reference on all four axes scores ~1000; a
-peak well beyond it (the strongest of the strong) scores higher still, rather
-than every strong peak collapsing onto a flat ceiling the way fixed constants
-did on real (non-subset) data, where nearly every called peak used to hit
-1000. There is deliberately **no hard cap at 1000** for this reason.
-**Score is therefore only comparable *within* one run/output file** — the
-same peak can get a different score in a different run (e.g. a different
-`--chrom` selection or threshold set changes the peak population it's scaled
-against).
-
-> **`depth_ratio` — contrast against a *fixed* window, not a self-drawn one.**
-> The score's fourth factor is the peak's mean depth divided by the mean depth
-> of the same-strand sequence within `--context-window` bp (default 1000) on
-> either side, with **every called peak masked out of that background** (so a
-> cluster of genuine neighbouring sites does not suppress its own members).
->
-> It exists because the region-relative factor above is *self-referential* for
-> an isolated hump: `region_scale` is measured inside a region whose boundary
-> the hump itself drew, so a hump standing alone becomes its own baseline and
-> the test `prominence >= prominence-frac x region-scale` is satisfied no
-> matter what. A fixed-width window cannot be gamed that way. Being a ratio of
-> depths, it is also invariant to sequencing depth and to `--normalize-method`
-> — the property an absolute magnitude floor lacks.
->
-> Measured against an independent label (presence of each protein's canonical
-> motif near the summit, corrected for local sequence composition) on three
-> eCLIP libraries, it out-ranked every other component including prominence,
-> and it was the **only** one that still discriminated among *weak* peaks,
-> where prominence carries essentially no information. Adding it improved the
-> score's own ranking on all three libraries. Full numbers and the rejected
-> alternatives are in `peakcaller/context.py`.
->
-> It is **only a scoring component — it never filters a peak.** Its
-> distribution has no elbow, and the project's one externally confirmed
-> anchor (the CDH2 cluster) sits mid-distribution on it, so a hard cutoff
-> would delete peaks known to be real. `--context-window 0` skips the
-> measurement (costs ~7% runtime).
-
-## Tuning — important
-
-The absolute thresholds (`--min-prominence`, `--min-summit-reads`, `--region-min-depth`)
-are in **signal units**, so their meaning depends on how the run is normalized:
-
-- `--normalize-method none` (default): units are **raw reads** — `--min-prominence 20`
-  means "rises 20 reads above its surroundings". Interpretable per sample.
-- `--normalize-method rpm`: units are **RPM**, which depend on library size.
-
-Because coverage depth scales with sequencing depth, **these absolute thresholds
-must be tuned per dataset**. A worked example on a ~50k-read multi-gene subset
-that matched a researcher's IGV calls:
-
-```
---min-prominence 20  --min-summit-reads 30  --prominence-frac 0.2
---min-steepness 0.5  --rel-height 0.3  --min-distance 20  --region-min-depth 3
-```
-
-Moving to a full BAM (millions of reads), raise the *absolute* knobs
-(`--min-prominence`, `--min-summit-reads`) proportionally to the larger depths; the
-*relative* knobs (`--prominence-frac`, `--min-steepness`, `--rel-height`,
-`--region-scale-pct`) are ratios and carry over unchanged.
-
-### Worked example: scaling by library size
-
-The easiest recipe is to scale the two absolute knobs by the **depth ratio**
-between libraries. Pick one clear peak you trust and read its coverage depth in
-IGV for each library:
-
-| | reads in BAM | depth at a typical peak | `--min-prominence` | `--min-summit-reads` |
-|---|---|---|---|---|
-| tuned subset | ~50k | ~40 | 20 | 30 |
-| full library | ~20M | ~1600 (≈ 40×) | **20 × 40 = 800** | **30 × 40 = 1200** |
-
-So for the ~20M-read full BAM you would use roughly:
+threshold 하나를 근거 있게 정하는 게 불가능해서, **여러 엄격도의 결과를 한 번에 내놓는** 방식을 택했다.
 
 ```bash
-peakcaller --bam full.bam \
-    --min-prominence 800 --min-summit-reads 1200 \
-    --prominence-frac 0.2 --min-steepness 0.5 --rel-height 0.3 \
-    --region-min-depth 120 --min-distance 20 \
-    --library-type forward -o full.narrowPeak
+rbpc --bam sample.bam -o out.narrowPeak \
+  --library-type forward --summit-margins 18,48,98 --split-tiers
 ```
 
-(`--region-min-depth` scales the same way, 3 × 40 ≈ 120.) The exact multiplier
-is the ratio of typical peak depths, not necessarily the read-count ratio, so
-eyeball one or two peaks in IGV and adjust. Alternatively, run with
-`--normalize-method rpm` and tune the thresholds once in RPM units — then the
-same numbers transfer across libraries of different depth.
+1. BAM에서 노이즈 바닥(floor)을 자동으로 구한다
+2. 실제 기준 = floor + margin (항상 더하므로 노이즈 바닥 아래로는 못 내려간다)
+3. 각 peak에 통과한 최고 단계를 붙인다 → 이름이 `peak_123_T2` 형태가 된다
+4. `--split-tiers`를 주면 단계별 파일도 따로 나온다
 
-Quick guide: fewer/cleaner peaks → raise `--min-prominence`, `--min-summit-reads`,
-`--min-steepness`, or `--prominence-frac`. Fewer *duplication-driven* peaks
-specifically (independent of how tall they are) → raise `--min-complexity`. Tighter boundaries → lower
-`--rel-height`. One peak per gene → `--max-peaks-per-region 1`.
+예시값 `18,48,98`은 floor가 2일 때 20 / 50 / 100 reads가 된다.
+이 값은 관측된 summit 높이 분포를 보고 **세 구간이 고르게 나뉘도록** 잡은 것이지,
+"20 reads부터 진짜 결합"이라는 근거가 있는 건 아니다. 엄격도 라벨로 보면 된다.
 
-## Example
+옵션을 지정하지 않으면 기존 동작(단일 기준) 그대로다.
+
+### 다른 방식들을 기각한 이유
+
+| 시도한 방식 | 결과 |
+|--|--|
+| percentile로 자동 결정 | 분포가 매끄러워 경계가 없음. 값의 근거를 못 세움 |
+| 노이즈 바닥의 k배 | trim 비율을 바꾸면 라이브러리 간 순위가 뒤집힘 → 노이즈 값에 신호가 섞여 있었음 |
+| permutation 기반 FDR | 유의성 검정이라 이 도구의 방향과 맞지 않음 (코드는 `--min-prominence-auto-fdr` 뒤에 남겨둠) |
+
+진단해보니 4개 라이브러리의 노이즈 바닥이 covered base 당 1.4~1.8 reads로 거의 같았다.
+라이브러리별 보정이 필요한 문제가 아니라, 노이즈 바닥 위에 어디에 선을 그을지가 문제였다.
+
+---
+
+## 옵션
+
+### 주요 옵션
+
+아래 실행 결과에서 실제로 지정한 것들이다.
+
+| 옵션 | 설명 | 기본값 |
+|--|--|--|
+| `--bam` | 입력 BAM (정렬 + 인덱스 필요) | 필수 |
+| `-o` | 출력 파일 | 필수 |
+| `--library-type` | forward / reverse / unstranded. **가정하지 말고 확인할 것** | forward |
+| `--normalize-method` | none / rpm | none |
+| `--prominence-frac` | region 자체 규모 대비 prominence 비율 | 0.0 (off) |
+| `--min-steepness` | 기울기 하한 (prominence / width) | 0.0 (off) |
+| `--rel-height` | peak 경계를 잡는 높이 지점 (0=꼭대기, 1=바닥) | 0.3 |
+| `--min-distance` | summit 간 최소 거리 (bp) | 15 |
+| `--summit-margins` | 3단계 summit 기준. 예: `18,48,98` | 없음(off) |
+| `--split-tiers` | 단계별 파일 추가 출력 | off |
+
+`--prominence-frac`과 `--min-steepness`는 기본값이 off다. 아래 실행 결과처럼 쓰려면 직접 지정해야 한다.
+
+<details>
+<summary><b>전체 옵션</b> (대부분 기본값으로 동작)</summary>
+
+**Stage 1 — 구간 탐색**
+
+| 옵션 | 설명 | 기본값 |
+|--|--|--|
+| `--region-min-depth` | 구간으로 인정할 깊이 기준 | auto |
+| `--region-min-depth-pct` | auto 계산에 쓰는 percentile | 75.0 |
+| `--min-region-width` | 구간 최소 길이 (bp) | auto |
+| `--min-region-width-factor` | auto 계산 시 read length의 몇 배로 할지 | 2.0 |
+| `--region-gap` | 이 간격 이내는 한 구간으로 병합 (bp) | 200 |
+| `--min-region-reads` | 구간 최소 read 수 | 없음 |
+| `--coverage-gap` | coverage 청크 병합 간격 (bp, 메모리용) | 200 |
+
+**Stage 2 — peak 판정**
+
+| 옵션 | 설명 | 기본값 |
+|--|--|--|
+| `--min-prominence` | prominence 절대 하한 | 5.0 |
+| `--region-scale-pct` | region 규모를 정하는 percentile | 90.0 |
+| `--min-summit-reads` | summit 높이 하한 | 1.0 |
+| `--min-complexity` | read 시작 위치 다양성 하한 (PCR 증폭 덩어리 제거) | `--min-steepness` |
+| `--min-corrected-steepness` | background를 뺀 기울기 하한 | 0.0 (off) |
+| `--min-peak-width` | peak 최소 너비 (bp) | 5 |
+| `--max-peaks-per-region` | region 당 최대 peak 수 (0=무제한) | 0 |
+| `--context-window` | depth_ratio 계산용 local background 범위 (bp) | 1000 |
+
+**입출력**
+
+| 옵션 | 설명 | 기본값 |
+|--|--|--|
+| `--format` | narrowPeak / bed | narrowPeak |
+| `--flank` | 출력 시 peak을 양쪽으로 넓힘 (bp, 검출에는 영향 없음) | 10 |
+| `--bdg` | bedGraph 추가 출력 | off |
+| `--chrom` | 특정 염색체만 처리 | 전체 |
+| `--min-mapq` | MAPQ 하한 | 0 |
+| `--min-read-length` | read 길이 하한 | 0 |
+| `--keep-dup` | duplicate read 유지 | off |
+| `--scale-to` | rpm 환산 기준값 | 1000000 |
+
+**opt-in (기본 비활성)**
+
+`--min-prominence-auto-fdr`, `--target-fdr`, `--fdr-n-shuffles` — permutation 기반 empirical FDR로 `--min-prominence`를 자동 결정한다. 유의성 검정이라 이 도구의 방향과 맞지 않아 기본값에서 제외했고, 코드만 남겨뒀다.
+
+</details>
+
+`--summit-margins`와 `--min-summit-reads`는 AND 조건이다. 실제 T1 기준 = 둘 중 큰 값.
+
+배경 depth를 미리 확인하려면 `scripts/diag_bg.py`를 쓰면 된다.
+
+strand 검증 방법, coverage-gap과 region-gap의 차이, min-complexity 기본값의 유도 근거 등
+상세한 설계 메모는 [docs/design-notes.md](docs/design-notes.md)에 있다.
+
+### Score
+
+```
+score = 0.40 × 강도 + 0.15 × region 상대값 + 0.25 × 가파름 + 0.20 × depth_ratio
+```
+
+`depth_ratio`(±1kb 주변 대비)는 필터가 아니라 점수 성분으로만 쓴다.
+
+---
+
+## 실행 결과 (hg19, whole genome)
+
+```
+--library-type forward --normalize-method none --prominence-frac 0.2
+--min-steepness 0.5 --rel-height 0.3 --min-distance 20 --summit-margins 18,48,98
+```
+(`region-min-depth`, `min-region-width`는 지정하지 않아 auto)
+
+| RBP | region-min-depth | min-region-width | floor | 전체 peak | T1 | T2 | T3 | 시간 |
+|--|--|--|--|--|--|--|--|--|
+| ESRP1 | 2 | 88 bp | 2 | 12,763 | 5,189 | 3,873 | 3,701 | 1m51s |
+| RBFOX2 | 2 | 84 bp | 2 | 43,612 | 14,318 | 13,749 | 15,545 | 6m24s |
+| YBX1 | 3 | 100 bp | 2 | 233,631 | 115,433 | 65,115 | 53,083 | 7m07s |
+| QKI | 2 | 94 bp | 2 | 6,136 | 2,038 | 1,821 | 2,277 | 2m09s |
+
+### Summit 높이 분포 (raw reads)
+
+`samtools depth`로 summit 좌표를 재조회한 근사값이라 내부 계산과 미세한 차이가 있을 수 있다.
+
+| RBP | p10 | p25 | p50 | p75 | p90 |
+|--|--|--|--|--|--|
+| ESRP1 | 25 | 35 | 60 | 110 | 201 |
+| RBFOX2 | 28 | 42 | 72 | 132 | 256 |
+| YBX1 | 24 | 32 | 50 | 92 | 180 |
+| QKI | 29 | 42 | 73 | 143 | 309 |
+
+### 알려진 타깃 확인
+
+EMT 관련 유전자 GJA1, CDH1에서 peak이 남아 있는지만 확인했다. 놓치지 않았다는 확인이고, 단계 구분이 맞는지를 검증한 건 아니다.
+
+| RBP | GJA1 | CDH1 |
+|--|--|--|
+| ESRP1 | 12 (전부 T3) | 13 (T1×1, T2×4, T3×8) |
+| RBFOX2 | 12 (전부 T3) | 8 (T1×1, T2×1, T3×6) |
+| YBX1 | 31 (전부 T3) | 52 (T1×1, T3×51) |
+| QKI | 3 (T1×1, T2×2) | 1 (T2×1) |
+
+QKI만 두 유전자 모두 T3가 없다. 결합 강도 차이일 수 있으나 확인하지 않았다.
+
+---
+
+## 한계 / 하지 못한 것
+
+1. **IGV 대조를 하지 않았다.** 단계 경계 부근의 peak이 실제로 결합 부위처럼 보이는지 눈으로 확인하지 않았다. 남은 작업 중 가장 중요한 것.
+2. **생물학적 검증이 부족하다.** motif 농축은 일부만 확인했고, conservation 분석은 하지 않았다. replicate가 없어 재현성 확인도 불가능했다.
+3. **기존 도구와 비교하지 않았다.** MACS3, CLIPper, PureCLIP과의 벤치마크 미수행.
+4. **RBP 간 peak 수를 직접 비교할 수 없다.** 절대 depth 기준이라 깊게 시퀀싱된 라이브러리가 더 많이 통과한다. 비교하려면 downsampling이 필요하다. 위 표의 YBX1(233,631개)이 다른 RBP보다 크게 많은데, 실제 결합 특성인지 아티팩트인지 판단하지 않았다.
+5. **사용자가 정해야 하는 값이 남아 있다.** `prominence-frac`, `min-steepness`, `rel-height`는 자동화에 실패해 사용자 입력으로 남겼다.
+6. **depth_ratio 기반 기준을 못 만들었다.** background를 뺀 뒤 기울기를 재적용하는 방안을 검토했지만 ESRP1에서 신호와 역상관이 나와 채택하지 않았다. ESRP1은 모티프(GU-rich)가 약해 기준으로 삼기 어렵다.
+
+---
+
+## 설치 / 사용
 
 ```bash
-cd examples && bash run_example.sh
+pip install -e .
+
+rbpc --bam sample.sorted.bam -o out.narrowPeak --library-type forward
 ```
 
-Builds a small synthetic BAM (two adjacent mountains that must be split, a weak
-bump that must be ignored, a spliced read) and calls peaks on it.
+테스트: `pytest`
 
-## Tests
+---
 
-```bash
-pytest
-```
+## 참고
 
-## Memory / scaling
-
-Coverage is built **per chromosome as small per-island arrays** (only the
-covered stretches are allocated, never a whole-chromosome array), so peak memory
-is bounded by the largest covered island — typically a single gene (kilobases).
-Large / whole-genome BAMs therefore run without large allocations; RAM does not
-grow with BAM size. (`--chrom` restricts processing; under `rpm` the scaling
-factor is then computed from the fetched chromosomes only.)
-
-## License
-
-MIT.
+- `--summit-margins`의 floor는 가장 큰 상염색체 4개를 샘플링해 계산한다. 특정 염색체만 담긴 subset BAM에서는 샘플이 비어 fallback 값이 쓰인다. whole-genome BAM에서는 문제없다.
+- `--normalize-method rpm`을 쓰면 raw 단위로 계산된 floor가 신호 단위로 자동 환산된다.

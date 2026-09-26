@@ -27,6 +27,7 @@ ESRP1/
 QKI/
 └── CLIP/          QKI CLIP-seq 피크콜링
 PUM1/              (예정)
+RBPC/              CLIP-seq peak calling 도구 (개발 중단, 자체 README 참고)
 cobinding_analysis/  RBP 간 co-binding 통계 분석 (regioneR permutation 등)
 docs/              전체 워크플로우 다이어그램
 environment.yml    재현을 위한 conda 환경 정의
@@ -45,6 +46,11 @@ environment.yml    재현을 위한 conda 환경 정의
 ## Reproducibility
 
 `environment.yml`에 명시된 conda 환경을 사용합니다. 원본 탐색 과정의 코드는 포함하지 않으며, 검증이 끝난 최종 스크립트만 정리해 업로드합니다.
+
+## RBPC
+
+이 포트폴리오의 CLIP-seq 피크콜링에 사용한 도구. 통계적 유의성 검정 대신 prominence(주변부 대비 신호) 기반으로 peak을 판정한다.
+**개발 중단 (2026-09).** 자세한 설계/사용법은 [RBPC/README.md](RBPC/README.md) 참고.
 
 ## Status
 

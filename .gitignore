@@ -13,6 +13,12 @@
 *.bw
 *.bigwig
 
+# RBPC 출력물 (RBPC/.gitignore가 이미 그 하위는 커버하지만, 루트 레벨도 대비)
+*.narrowPeak
+*.bed
+*.bdg
+*.tsv
+
 # 시스템/에디터
 .DS_Store
 *:Zone.Identifier
